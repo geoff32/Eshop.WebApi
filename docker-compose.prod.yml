@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  eshop-api:
+    image: ghcr.io/geoff32/eshop.webapi:latest
+    container_name: eshop-api
+    restart: unless-stopped
+    ports:
+      - "80:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=${DATABASE_CONNECTION_STRING}
+    depends_on:
+      - postgres
+    networks:
+      - eshop-network
+
+  postgres:
+    image: postgres:15
+    container_name: eshop-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-eshop}
+      POSTGRES_USER: ${POSTGRES_USER:-eshop_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-eshop_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./src/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+    networks:
+      - eshop-network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  eshop-network:
+    driver: bridge
