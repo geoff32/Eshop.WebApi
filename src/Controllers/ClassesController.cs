@@ -1,9 +1,11 @@
 using Dapper;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using EshopApi.Models;
 
 [ApiController]
 [Route("api/classes")]
+[Authorize]
 public class ClassesController : ControllerBase
 {
     private readonly IDbConnectionFactory _dbFactory;
