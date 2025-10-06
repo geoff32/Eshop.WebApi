@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: geoff32/eshop.webapi # ${{ github.repository }}
 
 jobs:
   test:
@@ -127,7 +127,7 @@ jobs:
           docker run -d \
             --name eshop-api \
             --restart unless-stopped \
-            -p 80:8080 \
+            -p 8090:8080 \
             -e ASPNETCORE_ENVIRONMENT=Production \
             -e ConnectionStrings__DefaultConnection="${{ secrets.DATABASE_CONNECTION_STRING }}" \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest

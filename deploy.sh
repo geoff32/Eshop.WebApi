@@ -44,7 +44,7 @@ if [ -n "$SERVER" ]; then
         docker run -d \\
             --name $CONTAINER_NAME \\
             --restart unless-stopped \\
-            -p 80:8080 \\
+            -p 8090:8080 \\
             -e ASPNETCORE_ENVIRONMENT=Production \\
             --env-file .env \\
             $FULL_IMAGE_NAME
@@ -72,7 +72,7 @@ else
     docker run -d \
         --name $CONTAINER_NAME \
         --restart unless-stopped \
-        -p 80:8080 \
+        -p 8090:8080 \
         -e ASPNETCORE_ENVIRONMENT=Production \
         --env-file .env \
         "$FULL_IMAGE_NAME"
