@@ -1,10 +1,9 @@
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
-using System.Text;
+using EshopApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,19 +11,19 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
-// Configuration de Swagger avec authentification JWT
+// Configuration de Swagger avec authentification par cookies
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo { Title = "EShop API", Version = "v1" });
     
-    // Ajouter la définition de sécurité JWT
-    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    // Ajouter la définition de sécurité par cookies
+    c.AddSecurityDefinition("Cookies", new OpenApiSecurityScheme
     {
-        Description = "JWT Authorization header using the Bearer scheme. Enter 'Bearer' [space] and then your token in the text input below.",
-        Name = "Authorization",
-        In = ParameterLocation.Header,
+        Description = "Cookie-based authentication. Login first to authenticate.",
+        Name = "EShop.Auth",
+        In = ParameterLocation.Cookie,
         Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
+        Scheme = "Cookies"
     });
     
     c.AddSecurityRequirement(new OpenApiSecurityRequirement()
@@ -35,44 +34,50 @@ builder.Services.AddSwaggerGen(c =>
                 Reference = new OpenApiReference
                 {
                     Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
+                    Id = "Cookies"
                 },
-                Scheme = "oauth2",
-                Name = "Bearer",
-                In = ParameterLocation.Header,
+                Name = "EShop.Auth",
+                In = ParameterLocation.Cookie,
             },
             new List<string>()
         }
     });
 });
 
-// Configuration de l'authentification
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
+// Configuration de l'authentification par cookies
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
     {
-        options.TokenValidationParameters = new TokenValidationParameters
+        options.LoginPath = "/api/auth/login";
+        options.LogoutPath = "/api/auth/logout";
+        options.AccessDeniedPath = "/api/auth/access-denied";
+        options.ExpireTimeSpan = TimeSpan.FromHours(24);
+        options.SlidingExpiration = true;
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SameSite = SameSiteMode.Strict;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        options.Cookie.Name = "EShop.Auth";
+        
+        // Pour les API, on retourne du JSON au lieu de rediriger
+        options.Events.OnRedirectToLogin = context =>
         {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = builder.Configuration["Authentication:Jwt:Issuer"],
-            ValidAudience = builder.Configuration["Authentication:Jwt:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(builder.Configuration["Authentication:Jwt:SecretKey"] ?? 
-                throw new InvalidOperationException("JWT Secret key not configured")))
+            context.Response.StatusCode = 401;
+            return Task.CompletedTask;
         };
-    })
-    .AddGoogle(googleOptions =>
-    {
-        googleOptions.ClientId = builder.Configuration["Authentication:Google:ClientId"] ?? 
-            throw new InvalidOperationException("Google Client ID not configured");
-        googleOptions.ClientSecret = builder.Configuration["Authentication:Google:ClientSecret"] ?? 
-            throw new InvalidOperationException("Google Client Secret not configured");
+        
+        options.Events.OnRedirectToAccessDenied = context =>
+        {
+            context.Response.StatusCode = 403;
+            return Task.CompletedTask;
+        };
     });
 
 builder.Services.AddAuthorization();
+
+// Injection des dépendances
 builder.Services.AddSingleton<IDbConnectionFactory, DbConnectionFactory>();
+builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddScoped<IPasswordService, PasswordService>();
 
 var app = builder.Build();
 

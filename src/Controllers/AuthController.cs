@@ -1,111 +1,225 @@
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.Google;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Text;
+using System.ComponentModel.DataAnnotations;
+using EshopApi.Models;
+using EshopApi.Services;
 
 [ApiController]
 [Route("api/auth")]
 public class AuthController : ControllerBase
 {
-    private readonly IConfiguration _configuration;
+    private readonly IUserService _userService;
+    private readonly IPasswordService _passwordService;
 
-    public AuthController(IConfiguration configuration)
+    public AuthController(IUserService userService, IPasswordService passwordService)
     {
-        _configuration = configuration;
+        _userService = userService;
+        _passwordService = passwordService;
     }
 
-    [HttpGet("google")]
-    public IActionResult GoogleLogin(string? returnUrl = null)
+    [HttpPost("register")]
+    public async Task<IActionResult> Register([FromBody] RegisterRequest request)
     {
-        var redirectUrl = Url.Action(nameof(GoogleCallback), new { returnUrl });
-        var properties = new AuthenticationProperties { RedirectUri = redirectUrl };
-        return Challenge(properties, GoogleDefaults.AuthenticationScheme);
-    }
-
-    [HttpGet("google/callback")]
-    public async Task<IActionResult> GoogleCallback(string? returnUrl = null)
-    {
-        var result = await HttpContext.AuthenticateAsync(GoogleDefaults.AuthenticationScheme);
-        
-        if (!result.Succeeded)
+        // Validation des données
+        if (string.IsNullOrWhiteSpace(request.Email) || 
+            string.IsNullOrWhiteSpace(request.Password) ||
+            string.IsNullOrWhiteSpace(request.FirstName) ||
+            string.IsNullOrWhiteSpace(request.LastName))
         {
-            return BadRequest("Authentication failed");
+            return BadRequest("Tous les champs sont requis");
         }
 
-        var claims = result.Principal?.Claims?.ToList();
-        if (claims == null)
+        // Validation de l'email
+        if (!IsValidEmail(request.Email))
         {
-            return BadRequest("No claims found");
+            return BadRequest("Format d'email invalide");
         }
 
-        // Générer un token JWT
-        var token = GenerateJwtToken(claims);
-        
-        // Retourner le token (dans un vrai projet, vous pourriez rediriger vers votre frontend avec le token)
-        return Ok(new { token = token });
+        // Validation du mot de passe
+        if (request.Password.Length < 6)
+        {
+            return BadRequest("Le mot de passe doit contenir au moins 6 caractères");
+        }
+
+        try
+        {
+            // Vérifier si l'email existe déjà
+            if (await _userService.EmailExistsAsync(request.Email))
+            {
+                return BadRequest("Un compte avec cet email existe déjà");
+            }
+
+            // Créer l'utilisateur
+            var user = await _userService.CreateUserAsync(request);
+
+            // Créer les claims pour l'authentification
+            var claims = CreateUserClaims(user);
+            var claimsIdentity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+            var authProperties = new AuthenticationProperties
+            {
+                IsPersistent = true,
+                ExpiresUtc = DateTimeOffset.UtcNow.AddHours(24)
+            };
+
+            // Connecter l'utilisateur avec un cookie
+            await HttpContext.SignInAsync(
+                CookieAuthenticationDefaults.AuthenticationScheme,
+                new ClaimsPrincipal(claimsIdentity),
+                authProperties);
+
+            // Retourner la réponse sans token
+            return Ok(new
+            {
+                Message = "Compte créé et connecté avec succès",
+                User = new UserDto
+                {
+                    Id = user.Id,
+                    Email = user.Email,
+                    FirstName = user.FirstName,
+                    LastName = user.LastName,
+                    CreatedAt = user.CreatedAt
+                }
+            });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, "Erreur lors de la création du compte");
+        }
     }
 
-    [HttpPost("token")]
-    public IActionResult GetToken([FromBody] LoginRequest request)
+    [HttpPost("login")]
+    public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
-        // Dans un vrai projet, vous valideriez les credentials ici
-        // Pour cet exemple, nous créons un token basique
-        var claims = new[]
+        // Validation des données
+        if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
         {
-            new Claim(ClaimTypes.Name, request.Email),
-            new Claim(ClaimTypes.Email, request.Email),
-            new Claim(JwtRegisteredClaimNames.Sub, request.Email),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
-        };
+            return BadRequest("Email et mot de passe requis");
+        }
 
-        var token = GenerateJwtToken(claims);
-        return Ok(new { token = token });
+        try
+        {
+            // Récupérer l'utilisateur
+            var user = await _userService.GetUserByEmailAsync(request.Email);
+            if (user == null)
+            {
+                return BadRequest("Email ou mot de passe incorrect");
+            }
+
+            // Vérifier le mot de passe
+            if (!_passwordService.VerifyPassword(request.Password, user.PasswordHash))
+            {
+                return BadRequest("Email ou mot de passe incorrect");
+            }
+
+            // Créer les claims pour l'authentification
+            var claims = CreateUserClaims(user);
+            var claimsIdentity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+            var authProperties = new AuthenticationProperties
+            {
+                IsPersistent = true,
+                ExpiresUtc = DateTimeOffset.UtcNow.AddHours(24)
+            };
+
+            // Connecter l'utilisateur avec un cookie
+            await HttpContext.SignInAsync(
+                CookieAuthenticationDefaults.AuthenticationScheme,
+                new ClaimsPrincipal(claimsIdentity),
+                authProperties);
+
+            // Retourner la réponse sans token
+            return Ok(new
+            {
+                Message = "Connexion réussie",
+                User = new UserDto
+                {
+                    Id = user.Id,
+                    Email = user.Email,
+                    FirstName = user.FirstName,
+                    LastName = user.LastName,
+                    CreatedAt = user.CreatedAt
+                }
+            });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, "Erreur lors de la connexion");
+        }
     }
 
     [Authorize]
     [HttpGet("profile")]
-    public IActionResult GetProfile()
+    public async Task<IActionResult> GetProfile()
     {
-        var user = HttpContext.User;
-        return Ok(new
+        try
         {
-            Name = user.FindFirst(ClaimTypes.Name)?.Value,
-            Email = user.FindFirst(ClaimTypes.Email)?.Value,
-            Claims = user.Claims.Select(c => new { c.Type, c.Value })
-        });
-    }
+            var userIdClaim = HttpContext.User.FindFirst("sub")?.Value;
+            if (string.IsNullOrEmpty(userIdClaim) || !int.TryParse(userIdClaim, out int userId))
+            {
+                return Unauthorized();
+            }
 
-    private string GenerateJwtToken(IEnumerable<Claim> claims)
-    {
-        var secretKey = _configuration["Authentication:Jwt:SecretKey"];
-        var issuer = _configuration["Authentication:Jwt:Issuer"];
-        var audience = _configuration["Authentication:Jwt:Audience"];
+            var user = await _userService.GetUserByIdAsync(userId);
+            if (user == null)
+            {
+                return NotFound("Utilisateur non trouvé");
+            }
 
-        if (string.IsNullOrEmpty(secretKey) || string.IsNullOrEmpty(issuer) || string.IsNullOrEmpty(audience))
-        {
-            throw new InvalidOperationException("JWT configuration is incomplete");
+            return Ok(new UserDto
+            {
+                Id = user.Id,
+                Email = user.Email,
+                FirstName = user.FirstName,
+                LastName = user.LastName,
+                CreatedAt = user.CreatedAt
+            });
         }
-
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
-        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-
-        var token = new JwtSecurityToken(
-            issuer: issuer,
-            audience: audience,
-            claims: claims,
-            expires: DateTime.Now.AddHours(24),
-            signingCredentials: creds);
-
-        return new JwtSecurityTokenHandler().WriteToken(token);
+        catch (Exception)
+        {
+            return StatusCode(500, "Erreur lors de la récupération du profil");
+        }
     }
-}
 
-public class LoginRequest
-{
-    public string Email { get; set; } = string.Empty;
-    public string Password { get; set; } = string.Empty;
+    [HttpPost("logout")]
+    [Authorize]
+    public async Task<IActionResult> Logout()
+    {
+        try
+        {
+            await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+            return Ok(new { Message = "Déconnexion réussie" });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, "Erreur lors de la déconnexion");
+        }
+    }
+
+    private List<Claim> CreateUserClaims(User user)
+    {
+        return new List<Claim>
+        {
+            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new Claim(ClaimTypes.Email, user.Email),
+            new Claim(ClaimTypes.Name, $"{user.FirstName} {user.LastName}"),
+            new Claim("sub", user.Id.ToString()),
+            new Claim("firstName", user.FirstName),
+            new Claim("lastName", user.LastName)
+        };
+    }
+
+    private bool IsValidEmail(string email)
+    {
+        try
+        {
+            var addr = new System.Net.Mail.MailAddress(email);
+            return addr.Address == email;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }
